@@ -14,6 +14,7 @@ import androidx.recyclerview.widget.RecyclerView
 import app.k9mail.core.android.common.contact.ContactRepository
 import app.k9mail.legacy.message.controller.MessageReference
 import com.fsck.k9.contacts.ContactPictureLoader
+import com.fsck.k9.ui.messagelist.item.AggregateTabViewHolder
 import com.fsck.k9.ui.messagelist.item.BannerInlineListInAppNotificationViewHolder
 import com.fsck.k9.ui.messagelist.item.ComposableMessageViewHolder
 import com.fsck.k9.ui.messagelist.item.FooterViewHolder
@@ -35,6 +36,7 @@ private const val IN_APP_NOTIFICATION_BANNER_INLINE_LIST_ID = -1L
 private const val TYPE_MESSAGE = 0
 private const val TYPE_FOOTER = 1
 private const val TYPE_IN_APP_NOTIFICATION_BANNER_INLINE_LIST = 2
+private const val TYPE_AGGREGATE_TAB = 3
 
 @Suppress("LongParameterList")
 class MessageListAdapter internal constructor(
@@ -142,6 +144,10 @@ class MessageListAdapter internal constructor(
         listItemListener.onFooterClicked()
     }
 
+    private val aggregateTabClickListener: (AggregateFolderTab) -> Unit = { tab ->
+        listItemListener.onAggregateTabClicked(tab)
+    }
+
     private val starClickListener = OnClickListener { view: View ->
         val parentView = view.parent as View
         val messageListItem = getItemFromView(parentView) ?: return@OnClickListener
@@ -222,6 +228,8 @@ class MessageListAdapter internal constructor(
 
             TYPE_FOOTER -> FooterViewHolder.create(layoutInflater, parent, footerClickListener)
 
+            TYPE_AGGREGATE_TAB -> AggregateTabViewHolder.create(layoutInflater, parent, aggregateTabClickListener)
+
             TYPE_IN_APP_NOTIFICATION_BANNER_INLINE_LIST if isInAppNotificationEnabled ->
                 BannerInlineListInAppNotificationViewHolder(
                     view = ComposeView(context = parent.context),
@@ -291,6 +299,12 @@ class MessageListAdapter internal constructor(
                 val footerViewHolder = holder as FooterViewHolder
                 val footer = viewItems[position] as MessageListViewItem.Footer
                 footerViewHolder.bind(footer.text)
+            }
+
+            TYPE_AGGREGATE_TAB -> {
+                val aggregateTabViewHolder = holder as AggregateTabViewHolder
+                val aggregateTab = viewItems[position] as MessageListViewItem.AggregateTab
+                aggregateTabViewHolder.bind(aggregateTab.tab)
             }
 
             else -> {
@@ -402,6 +416,10 @@ private class MessageListDiffCallback(
             if newItem is MessageListViewItem.Message -> oldItem.item.uniqueId == newItem.item.uniqueId
 
             is MessageListViewItem.Footer if newItem is MessageListViewItem.Footer -> true
+
+            is MessageListViewItem.AggregateTab if newItem is MessageListViewItem.AggregateTab ->
+                oldItem.tab.accountUuid == newItem.tab.accountUuid && oldItem.tab.folderId == newItem.tab.folderId
+
             else -> false
         }
     }
@@ -416,6 +434,7 @@ interface MessageListItemActionListener {
     fun onToggleMessageSelection(item: MessageListItem)
     fun onToggleMessageFlag(item: MessageListItem)
     fun onFooterClicked()
+    fun onAggregateTabClicked(tab: AggregateFolderTab)
     fun filterInAppNotificationEvents(notification: InAppNotification): Boolean
     fun onNotificationActionClicked(action: NotificationAction)
 }
@@ -437,5 +456,10 @@ sealed interface MessageListViewItem {
     data class Footer(val text: String) : MessageListViewItem {
         override val viewId: Long = FOOTER_ID
         override val viewType: Int = TYPE_FOOTER
+    }
+
+    data class AggregateTab(val tab: AggregateFolderTab) : MessageListViewItem {
+        override val viewId: Long get() = tab.viewId
+        override val viewType: Int = TYPE_AGGREGATE_TAB
     }
 }

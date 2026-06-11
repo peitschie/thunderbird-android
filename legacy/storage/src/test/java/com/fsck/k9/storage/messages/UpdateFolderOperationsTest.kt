@@ -71,6 +71,7 @@ class UpdateFolderOperationsTest : RobolectricTest() {
                 isSyncEnabled = true,
                 isNotificationsEnabled = true,
                 isPushEnabled = true,
+                isAggregateTab = true,
             ),
         )
 
@@ -82,6 +83,7 @@ class UpdateFolderOperationsTest : RobolectricTest() {
         assertThat(folder.syncEnabled).isEqualTo(1)
         assertThat(folder.notificationsEnabled).isEqualTo(1)
         assertThat(folder.pushEnabled).isEqualTo(1)
+        assertThat(folder.aggregateTab).isEqualTo(1)
     }
 
     @Test

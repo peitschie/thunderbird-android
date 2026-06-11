@@ -705,6 +705,7 @@ class LegacyMessageListFragment :
             sortDateAscending,
             activeMessage,
             legacyViewModel.messageSortOverrides.toMap(),
+            showAggregateTabs = shouldShowAggregateTabs(),
         )
 
         if (forceUpdate) {
@@ -809,6 +810,12 @@ class LegacyMessageListFragment :
                 activityListener,
             )
         }
+    }
+
+    override fun onAggregateTabClicked(tab: AggregateFolderTab) {
+        if (!isActive) return
+
+        fragmentListener.navigateToFolder(tab.accountUuid, tab.folderId)
     }
 
     override fun onMessageClicked(messageListItem: MessageListItem) {
@@ -1952,6 +1959,15 @@ class LegacyMessageListFragment :
     private val isInbox: Boolean
         get() = isSpecialFolder(account?.inboxFolderId)
 
+    /**
+     * Aggregate folder tabs are only shown on inbox-like message lists: a single account's Inbox or
+     * the Unified Inbox. They're never shown for thread views or manual searches.
+     */
+    private fun shouldShowAggregateTabs(): Boolean {
+        if (isThreadDisplay || localSearch.isManualSearch) return false
+        return (isSingleFolderMode && isInbox) || isUnifiedFolders
+    }
+
     private val isArchiveFolder: Boolean
         get() = isSpecialFolder(account?.archiveFolderId)
 
@@ -2035,6 +2051,7 @@ class LegacyMessageListFragment :
             if (featureFlagProvider.provide(FeatureFlagKey.DisplayInAppNotifications).isEnabled()) {
                 add(MessageListViewItem.InAppNotificationBannerList)
             }
+            addAll(messageListInfo.aggregateTabs.map { MessageListViewItem.AggregateTab(it) })
             addAll(messageListItems.map { MessageListViewItem.Message(it) })
         }
 

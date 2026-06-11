@@ -50,6 +50,12 @@
             android:title="@string/folder_settings_include_in_integrated_inbox_label"
             />
 
+        <SwitchPreference
+            android:key="folder_settings_aggregate_tab"
+            android:title="@string/folder_settings_aggregate_tab_label"
+            android:summary="@string/folder_settings_aggregate_tab_summary"
+            />
+
     </PreferenceCategory>
 
 </PreferenceScreen>

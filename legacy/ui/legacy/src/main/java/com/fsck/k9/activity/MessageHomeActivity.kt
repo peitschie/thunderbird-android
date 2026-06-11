@@ -693,6 +693,11 @@ open class MessageHomeActivity :
         }
     }
 
+    override fun navigateToFolder(accountUuid: String, folderId: Long) {
+        openFolder(accountUuid, folderId)
+        commitOpenFolderTransaction()
+    }
+
     private fun openFolder(accountId: String, folderId: Long) {
         if (displayMode == DisplayMode.SPLIT_VIEW) {
             removeMessageViewContainerFragment()

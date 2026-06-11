@@ -12,7 +12,7 @@ import net.thunderbird.core.logging.legacy.Log;
 
 
 class StoreSchemaDefinition implements SchemaDefinition {
-    static final int DB_VERSION = 91;
+    static final int DB_VERSION = 92;
 
     private final MigrationsHelper migrationsHelper;
 
@@ -95,6 +95,7 @@ class StoreSchemaDefinition implements SchemaDefinition {
                 "push_enabled INTEGER DEFAULT 0, " +
                 "visible INTEGER DEFAULT 1, " +
                 "notifications_enabled INTEGER DEFAULT 0, " +
+                "aggregate_tab INTEGER DEFAULT 0, " +
                 "more_messages TEXT default \"unknown\", " +
                 "server_id TEXT, " +
                 "local_only INTEGER, " +

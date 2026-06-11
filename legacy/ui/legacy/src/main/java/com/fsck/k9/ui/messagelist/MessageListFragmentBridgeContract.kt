@@ -64,6 +64,9 @@ interface MessageListFragmentBridgeContract {
         fun startSupportActionMode(callback: ActionMode.Callback): ActionMode?
         fun goBack()
 
+        /** Navigates to the given folder immediately (prepares and commits the transaction). */
+        fun navigateToFolder(accountUuid: String, folderId: Long)
+
         companion object Companion {
             const val MAX_PROGRESS = 10000
         }

@@ -8,4 +8,5 @@ data class FolderDetails(
     val isVisible: Boolean,
     val isNotificationsEnabled: Boolean,
     val isPushEnabled: Boolean,
+    val isAggregateTab: Boolean,
 )

@@ -724,6 +724,12 @@ class MessageListFragment :
         }
     }
 
+    override fun onAggregateTabClicked(tab: AggregateFolderTab) {
+        if (!isActive) return
+
+        fragmentListener.navigateToFolder(tab.accountUuid, tab.folderId)
+    }
+
     override fun onMessageClicked(messageListItem: MessageListItem) {
         if (!isActive) {
             // Ignore click events that are delivered after the Fragment is no longer active. This could happen when

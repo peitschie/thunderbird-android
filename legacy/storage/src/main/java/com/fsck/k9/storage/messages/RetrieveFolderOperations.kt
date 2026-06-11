@@ -239,11 +239,14 @@ private class CursorFolderAccessor(val cursor: Cursor) : FolderDetailsAccessor {
     override val lastChecked: Long?
         get() = cursor.getLongOrNull(13)
 
+    override val isAggregateTab: Boolean
+        get() = cursor.getInt(14) == 1
+
     override val unreadMessageCount: Int
-        get() = cursor.getInt(14)
+        get() = cursor.getInt(15)
 
     override val starredMessageCount: Int
-        get() = cursor.getInt(15)
+        get() = cursor.getInt(16)
 
     override fun serverIdOrThrow(): String {
         return serverId ?: error("No server ID found for folder '$name' ($id)")
@@ -265,4 +268,5 @@ private val FOLDER_COLUMNS = arrayOf(
     "visible_limit",
     "more_messages",
     "last_updated",
+    "aggregate_tab",
 )

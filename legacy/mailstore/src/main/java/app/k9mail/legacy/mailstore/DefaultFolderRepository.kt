@@ -61,6 +61,7 @@ class DefaultFolderRepository(
                 isVisible = folder.isVisible,
                 isNotificationsEnabled = folder.isNotificationsEnabled,
                 isPushEnabled = folder.isPushEnabled,
+                isAggregateTab = folder.isAggregateTab,
             )
         }
     }

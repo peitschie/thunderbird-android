@@ -24,6 +24,7 @@ class FolderSettingsDataStore(
             "folder_settings_notifications" -> folder.isNotificationsEnabled
             "folder_settings_push" -> folder.isPushEnabled
             "folder_settings_visible" -> folder.isVisible
+            "folder_settings_aggregate_tab" -> folder.isAggregateTab
             else -> error("Unknown key: $key")
         }
     }
@@ -36,6 +37,7 @@ class FolderSettingsDataStore(
             "folder_settings_notifications" -> updateFolder(folder.copy(isNotificationsEnabled = value))
             "folder_settings_push" -> updateFolder(folder.copy(isPushEnabled = value))
             "folder_settings_visible" -> updateFolder(folder.copy(isVisible = value))
+            "folder_settings_aggregate_tab" -> updateFolder(folder.copy(isAggregateTab = value))
             else -> error("Unknown key: $key")
         }
     }

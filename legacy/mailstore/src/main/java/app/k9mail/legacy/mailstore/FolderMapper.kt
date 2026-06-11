@@ -18,6 +18,7 @@ interface FolderDetailsAccessor {
     val isVisible: Boolean
     val isNotificationsEnabled: Boolean
     val isPushEnabled: Boolean
+    val isAggregateTab: Boolean
     val visibleLimit: Int
     val moreMessages: MoreMessages
     val lastChecked: Long?

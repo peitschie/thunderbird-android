@@ -555,7 +555,14 @@
     <string name="folder_settings_sync_label">Enable sync</string>
     <string name="folder_settings_push_label">Enable Push</string>
     <string name="folder_settings_notifications_label">Notifications</string>
+    <string name="folder_settings_aggregate_tab_label">Show as inbox tab</string>
+    <string name="folder_settings_aggregate_tab_summary">Show a summary of this folder\'s unread messages at the top of the inbox</string>
     <string name="folder_settings_clear_local_folder_action">Clear local messages</string>
+
+    <plurals name="message_list_aggregate_tab_new_count">
+        <item quantity="one">%1$d new</item>
+        <item quantity="other">%1$d new</item>
+    </plurals>
 
     <string name="account_settings_incoming_label">Incoming server</string>
     <string name="account_settings_incoming_summary">Configure the incoming mail server</string>

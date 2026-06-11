@@ -1,6 +1,7 @@
 package com.fsck.k9.ui.messagelist
 
 import app.k9mail.legacy.mailstore.MessageListRepository
+import app.k9mail.legacy.mailstore.MessageStoreManager
 import com.fsck.k9.contacts.ContactLetterBitmapCreator
 import com.fsck.k9.helper.MessageHelper
 import com.fsck.k9.mailstore.LocalStoreProvider
@@ -23,6 +24,7 @@ class MessageListLoader(
     private val accountManager: LegacyAccountManager,
     private val localStoreProvider: LocalStoreProvider,
     private val messageListRepository: MessageListRepository,
+    private val messageStoreManager: MessageStoreManager,
     private val messageHelper: MessageHelper,
     private val messageListPreferencesManager: MessageListPreferencesManager,
     private val outboxFolderManager: OutboxFolderManager,
@@ -51,14 +53,13 @@ class MessageListLoader(
 
         val hasMoreMessages = loadHasMoreMessages(accounts, config.search.folderIds)
 
-        return MessageListInfo(messageListItems, hasMoreMessages)
+        val aggregateTabs = loadAggregateTabs(accounts, config)
+
+        return MessageListInfo(messageListItems, hasMoreMessages, aggregateTabs)
     }
 
-    private fun loadMessageListForAccount(account: LegacyAccount, config: MessageListConfig): List<MessageListItem> {
-        val accountUuid = account.uuid
-        val threadId = getThreadId(config.search)
-        val sortOrder = buildSortOrder(config)
-        val mapper = MessageListItemMapper(
+    private fun createMessageMapper(account: LegacyAccount): MessageListItemMapper {
+        return MessageListItemMapper(
             messageHelper,
             account,
             messageListPreferencesManager,
@@ -68,6 +69,13 @@ class MessageListLoader(
                     featureFlagProvider.provide(MessageListFeatureFlags.EnableMessageListNewState).isEnabled()
             },
         )
+    }
+
+    private fun loadMessageListForAccount(account: LegacyAccount, config: MessageListConfig): List<MessageListItem> {
+        val accountUuid = account.uuid
+        val threadId = getThreadId(config.search)
+        val sortOrder = buildSortOrder(config)
+        val mapper = createMessageMapper(account)
 
         return when {
             threadId != null -> {
@@ -199,6 +207,72 @@ class MessageListLoader(
             false
         }
     }
+
+    private fun loadAggregateTabs(
+        accounts: List<LegacyAccount>,
+        config: MessageListConfig,
+    ): List<AggregateFolderTab> {
+        if (!config.showAggregateTabs) return emptyList()
+
+        return accounts.flatMap { account -> loadAggregateTabsForAccount(account) }
+    }
+
+    private fun loadAggregateTabsForAccount(account: LegacyAccount): List<AggregateFolderTab> {
+        val messageStore = messageStoreManager.getMessageStore(account.uuid)
+
+        val tabFolders = messageStore.getDisplayFolders(
+            includeHiddenFolders = true,
+            // The outbox isn't relevant here; passing null means unread counts are computed normally.
+            outboxFolderId = null,
+        ) { folder ->
+            AggregateTabFolder(
+                id = folder.id,
+                name = folder.name,
+                unreadCount = folder.unreadMessageCount,
+                isAggregateTab = folder.isAggregateTab,
+            )
+        }
+
+        return tabFolders
+            .filter { it.isAggregateTab && it.unreadCount > 0 }
+            .map { folder ->
+                val latest = loadLatestUnread(account, folder.id)
+                AggregateFolderTab(
+                    accountUuid = account.uuid,
+                    folderId = folder.id,
+                    displayName = folder.name,
+                    unreadCount = folder.unreadCount,
+                    sender = latest?.displayName?.toString()?.trim().orEmpty(),
+                    subject = latest?.subject?.trim().orEmpty(),
+                )
+            }
+    }
+
+    /**
+     * Returns the most recent unread message in the folder, used to build the Gmail-style
+     * "Sender — Subject" preview line. The view truncates the result to a single line.
+     */
+    private fun loadLatestUnread(account: LegacyAccount, folderId: Long): MessageListItem? {
+        val mapper = createMessageMapper(account)
+        val selection = "${MessageColumns.FOLDER_ID} = ? AND ${MessageColumns.READ} = 0"
+        val selectionArgs = arrayOf(folderId.toString())
+        val sortOrder = "${MessageColumns.DATE} DESC LIMIT 1"
+
+        return messageListRepository.getMessages(
+            accountUuid = account.uuid,
+            selection = selection,
+            selectionArgs = selectionArgs,
+            sortOrder = sortOrder,
+            messageMapper = mapper,
+        ).firstOrNull()
+    }
+
+    private data class AggregateTabFolder(
+        val id: Long,
+        val name: String,
+        val unreadCount: Int,
+        val isAggregateTab: Boolean,
+    )
 }
 
 private inline fun <T> compareBy(sortAscending: Boolean, crossinline selector: (T) -> Comparable<*>?): Comparator<T> {
@@ -225,4 +299,8 @@ private fun Comparator<MessageListItem>.thenByDate(config: MessageListConfig): C
     }
 }
 
-data class MessageListInfo(val messageListItems: List<MessageListItem>, val hasMoreMessages: Boolean)
+data class MessageListInfo(
+    val messageListItems: List<MessageListItem>,
+    val hasMoreMessages: Boolean,
+    val aggregateTabs: List<AggregateFolderTab> = emptyList(),
+)

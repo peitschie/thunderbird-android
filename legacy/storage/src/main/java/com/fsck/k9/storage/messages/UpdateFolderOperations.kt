@@ -28,6 +28,7 @@ internal class UpdateFolderOperations(private val lockableDatabase: LockableData
                 put("visible", folderDetails.isVisible)
                 put("notifications_enabled", folderDetails.isNotificationsEnabled)
                 put("push_enabled", folderDetails.isPushEnabled)
+                put("aggregate_tab", folderDetails.isAggregateTab)
             }
 
             db.update("folders", contentValues, "id = ?", arrayOf(folderDetails.folder.id.toString()))
