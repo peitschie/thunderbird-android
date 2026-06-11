@@ -45,15 +45,33 @@ class MessageListLoader(
 
     private fun getMessageListInfo(config: MessageListConfig): MessageListInfo {
         val accounts = config.search.getLegacyAccounts(accountManager)
+
+        // Folders flagged as aggregate tabs (regardless of unread state), per account.
+        val tabFoldersByAccount = if (config.showAggregateTabs) {
+            accounts.associateWith { account -> loadAggregateTabFolders(account) }
+        } else {
+            emptyMap()
+        }
+
+        // Messages living in an aggregate-tab folder are represented by the tab, so exclude them
+        // from the (unified) inbox list to avoid showing them in both places. This is a no-op for a
+        // single-account inbox, where the list only contains that folder's own messages.
+        val excludedFolderIdsByAccountUuid = tabFoldersByAccount.entries.associate { (account, folders) ->
+            account.uuid to folders.mapTo(mutableSetOf()) { it.id }
+        }
+
         val messageListItems = accounts
             .flatMap { account ->
-                loadMessageListForAccount(account, config)
+                loadMessageListForAccount(account, config, excludedFolderIdsByAccountUuid[account.uuid].orEmpty())
+            }
+            .filterNot { item ->
+                item.folderId in excludedFolderIdsByAccountUuid[item.account.uuid].orEmpty()
             }
             .sortedWith(config)
 
         val hasMoreMessages = loadHasMoreMessages(accounts, config.search.folderIds)
 
-        val aggregateTabs = loadAggregateTabs(accounts, config)
+        val aggregateTabs = buildAggregateTabs(tabFoldersByAccount)
 
         return MessageListInfo(messageListItems, hasMoreMessages, aggregateTabs)
     }
@@ -71,7 +89,11 @@ class MessageListLoader(
         )
     }
 
-    private fun loadMessageListForAccount(account: LegacyAccount, config: MessageListConfig): List<MessageListItem> {
+    private fun loadMessageListForAccount(
+        account: LegacyAccount,
+        config: MessageListConfig,
+        aggregateFolderIds: Set<Long>,
+    ): List<MessageListItem> {
         val accountUuid = account.uuid
         val threadId = getThreadId(config.search)
         val sortOrder = buildSortOrder(config)
@@ -83,18 +105,22 @@ class MessageListLoader(
             }
 
             config.showingThreadedList -> {
-                val (selection, selectionArgs) = buildSelection(account, config)
+                val (selection, selectionArgs) = buildSelection(account, config, aggregateFolderIds)
                 messageListRepository.getThreadedMessages(accountUuid, selection, selectionArgs, sortOrder, mapper)
             }
 
             else -> {
-                val (selection, selectionArgs) = buildSelection(account, config)
+                val (selection, selectionArgs) = buildSelection(account, config, aggregateFolderIds)
                 messageListRepository.getMessages(accountUuid, selection, selectionArgs, sortOrder, mapper)
             }
         }
     }
 
-    private fun buildSelection(account: LegacyAccount, config: MessageListConfig): Pair<String, Array<String>> {
+    private fun buildSelection(
+        account: LegacyAccount,
+        config: MessageListConfig,
+        aggregateFolderIds: Set<Long>,
+    ): Pair<String, Array<String>> {
         val query = StringBuilder()
         val queryArgs = mutableListOf<String>()
 
@@ -117,10 +143,28 @@ class MessageListLoader(
             query.append(')')
         }
 
-        val selection = query.toString()
-        val selectionArgs = queryArgs.toTypedArray()
+        var selection = query.toString()
 
-        return selection to selectionArgs
+        // Gmail-style: a categorised email exists in both the Inbox and its category folder as two
+        // IMAP messages sharing one RFC Message-ID. When that category folder is an aggregate tab,
+        // hide the message everywhere in this (inbox-like) list so it appears only via its tab. The
+        // folder-id filter alone misses the Inbox copy, so we also exclude by Message-ID.
+        if (config.showAggregateTabs && aggregateFolderIds.isNotEmpty()) {
+            val placeholders = aggregateFolderIds.joinToString(",") { "?" }
+            val messageId = "messages.${MessageColumns.MESSAGE_ID}"
+            val notInAggregate = "$messageId IS NULL OR $messageId NOT IN (" +
+                "SELECT agg.${MessageColumns.MESSAGE_ID} FROM messages agg " +
+                "WHERE agg.${MessageColumns.FOLDER_ID} IN ($placeholders) " +
+                "AND agg.${MessageColumns.MESSAGE_ID} IS NOT NULL)"
+            selection = if (selection.isBlank()) {
+                "($notInAggregate)"
+            } else {
+                "($selection) AND ($notInAggregate)"
+            }
+            aggregateFolderIds.forEach { queryArgs.add(it.toString()) }
+        }
+
+        return selection to queryArgs.toTypedArray()
     }
 
     private fun getThreadId(search: LocalMessageSearch): Long? {
@@ -208,19 +252,14 @@ class MessageListLoader(
         }
     }
 
-    private fun loadAggregateTabs(
-        accounts: List<LegacyAccount>,
-        config: MessageListConfig,
-    ): List<AggregateFolderTab> {
-        if (!config.showAggregateTabs) return emptyList()
-
-        return accounts.flatMap { account -> loadAggregateTabsForAccount(account) }
-    }
-
-    private fun loadAggregateTabsForAccount(account: LegacyAccount): List<AggregateFolderTab> {
+    /**
+     * Returns the folders flagged to act as aggregate tabs for the account (all of them, regardless
+     * of unread state), along with their current unread counts.
+     */
+    private fun loadAggregateTabFolders(account: LegacyAccount): List<AggregateTabFolder> {
         val messageStore = messageStoreManager.getMessageStore(account.uuid)
 
-        val tabFolders = messageStore.getDisplayFolders(
+        return messageStore.getDisplayFolders(
             includeHiddenFolders = true,
             // The outbox isn't relevant here; passing null means unread counts are computed normally.
             outboxFolderId = null,
@@ -231,21 +270,31 @@ class MessageListLoader(
                 unreadCount = folder.unreadMessageCount,
                 isAggregateTab = folder.isAggregateTab,
             )
-        }
+        }.filter { it.isAggregateTab }
+    }
 
-        return tabFolders
-            .filter { it.isAggregateTab && it.unreadCount > 0 }
-            .map { folder ->
-                val latest = loadLatestUnread(account, folder.id)
-                AggregateFolderTab(
-                    accountUuid = account.uuid,
-                    folderId = folder.id,
-                    displayName = folder.name,
-                    unreadCount = folder.unreadCount,
-                    sender = latest?.displayName?.toString()?.trim().orEmpty(),
-                    subject = latest?.subject?.trim().orEmpty(),
-                )
-            }
+    /**
+     * Builds the visible tabs: one per aggregate-tab folder that currently has unread mail. Folders
+     * with no unread messages produce no tab (but are still excluded from the inbox list).
+     */
+    private fun buildAggregateTabs(
+        tabFoldersByAccount: Map<LegacyAccount, List<AggregateTabFolder>>,
+    ): List<AggregateFolderTab> {
+        return tabFoldersByAccount.flatMap { (account, folders) ->
+            folders
+                .filter { it.unreadCount > 0 }
+                .map { folder ->
+                    val latest = loadLatestUnread(account, folder.id)
+                    AggregateFolderTab(
+                        accountUuid = account.uuid,
+                        folderId = folder.id,
+                        displayName = folder.name,
+                        unreadCount = folder.unreadCount,
+                        sender = latest?.displayName?.toString()?.trim().orEmpty(),
+                        subject = latest?.subject?.trim().orEmpty(),
+                    )
+                }
+        }
     }
 
     /**
