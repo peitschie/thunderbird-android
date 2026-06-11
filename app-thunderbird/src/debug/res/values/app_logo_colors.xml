@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Prototype marker: override the launcher icon background (normally pale blue #F0F8FF) with a
+         vivid orange so this aggregate-tabs prototype build is instantly distinguishable on the home
+         screen. Debug-only; does not affect release builds. -->
+    <color name="launcher_icon_background">#FF6D00</color>
+</resources>
