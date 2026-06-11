@@ -150,18 +150,25 @@ class MessageListLoader(
         // hide the message everywhere in this (inbox-like) list so it appears only via its tab. The
         // folder-id filter alone misses the Inbox copy, so we also exclude by Message-ID.
         if (config.showAggregateTabs && aggregateFolderIds.isNotEmpty()) {
-            val placeholders = aggregateFolderIds.joinToString(",") { "?" }
+            // Also count the Trash folder. When a categorised email is deleted from its aggregate
+            // folder it is MOVED to Trash, which would otherwise un-hide the still-present Inbox copy
+            // until the next server sync removes it. Keeping Trash in the set bridges that window.
+            // Like the Message-ID match itself, this assumes Gmail-style label folders (where the
+            // Inbox copy is the same message and is removed server-side); on plain IMAP the copies
+            // are independent, so this is a no-op at best.
+            val exclusionFolderIds = aggregateFolderIds + listOfNotNull(account.trashFolderId)
+            val placeholders = exclusionFolderIds.joinToString(",") { "?" }
             val messageId = "messages.${MessageColumns.MESSAGE_ID}"
-            val notInAggregate = "$messageId IS NULL OR $messageId NOT IN (" +
+            val notInExcluded = "$messageId IS NULL OR $messageId NOT IN (" +
                 "SELECT agg.${MessageColumns.MESSAGE_ID} FROM messages agg " +
                 "WHERE agg.${MessageColumns.FOLDER_ID} IN ($placeholders) " +
                 "AND agg.${MessageColumns.MESSAGE_ID} IS NOT NULL)"
             selection = if (selection.isBlank()) {
-                "($notInAggregate)"
+                "($notInExcluded)"
             } else {
-                "($selection) AND ($notInAggregate)"
+                "($selection) AND ($notInExcluded)"
             }
-            aggregateFolderIds.forEach { queryArgs.add(it.toString()) }
+            exclusionFolderIds.forEach { queryArgs.add(it.toString()) }
         }
 
         return selection to queryArgs.toTypedArray()
