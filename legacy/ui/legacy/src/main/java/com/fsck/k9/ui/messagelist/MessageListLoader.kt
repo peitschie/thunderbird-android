@@ -283,36 +283,52 @@ class MessageListLoader(
     /**
      * Builds the visible tabs: one per aggregate-tab folder that currently has unread mail. Folders
      * with no unread messages produce no tab (but are still excluded from the inbox list).
+     *
+     * Both the count and the preview are derived from the same cache-aware query
+     * ([loadUnreadTabMessages]) so they can never disagree. The raw DB [AggregateTabFolder.unreadCount]
+     * is used only as a cheap pre-filter: it ignores [MessageListCache], so right after a delete or
+     * mark-as-read it still counts messages the user has optimistically dismissed. Trusting it for the
+     * pill produced a laggy count and, once every unread message had been dismissed, a tab with a
+     * count but no preview line (the cache-aware preview query returned nothing).
      */
     private fun buildAggregateTabs(
         tabFoldersByAccount: Map<LegacyAccount, List<AggregateTabFolder>>,
     ): List<AggregateFolderTab> {
         return tabFoldersByAccount.flatMap { (account, folders) ->
             folders
+                // Cheap DB pre-filter: the cache can only hide/clear unread, never invent it, so a
+                // folder the DB reports as having zero unread cannot have a tab. (Optimistically
+                // marking a read message unread is the one exception; it resolves on the next sync.)
                 .filter { it.unreadCount > 0 }
-                .map { folder ->
-                    val latest = loadLatestUnread(account, folder.id)
+                .mapNotNull { folder ->
+                    val unread = loadUnreadTabMessages(account, folder.id)
+                    val latest = unread.firstOrNull() ?: return@mapNotNull null
                     AggregateFolderTab(
                         accountUuid = account.uuid,
                         folderId = folder.id,
                         displayName = folder.name,
-                        unreadCount = folder.unreadCount,
-                        sender = latest?.displayName?.toString()?.trim().orEmpty(),
-                        subject = latest?.subject?.trim().orEmpty(),
+                        unreadCount = unread.size,
+                        sender = latest.displayName.toString().trim(),
+                        subject = latest.subject?.trim().orEmpty(),
                     )
                 }
         }
     }
 
     /**
-     * Returns the most recent unread message in the folder, used to build the Gmail-style
-     * "Sender — Subject" preview line. The view truncates the result to a single line.
+     * Returns the folder's unread messages, most recent first, with optimistic [MessageListCache]
+     * state applied: messages the user has just deleted/moved are dropped (the cache hides them and
+     * the mapper maps them to null), and messages just marked read are filtered out here since the
+     * SQL `read = 0` predicate runs against the not-yet-updated database row.
+     *
+     * The first element drives the Gmail-style "Sender - Subject" preview line; the list size is the
+     * tab's unread count.
      */
-    private fun loadLatestUnread(account: LegacyAccount, folderId: Long): MessageListItem? {
+    private fun loadUnreadTabMessages(account: LegacyAccount, folderId: Long): List<MessageListItem> {
         val mapper = createMessageMapper(account)
         val selection = "${MessageColumns.FOLDER_ID} = ? AND ${MessageColumns.READ} = 0"
         val selectionArgs = arrayOf(folderId.toString())
-        val sortOrder = "${MessageColumns.DATE} DESC LIMIT 1"
+        val sortOrder = "${MessageColumns.DATE} DESC"
 
         return messageListRepository.getMessages(
             accountUuid = account.uuid,
@@ -320,7 +336,7 @@ class MessageListLoader(
             selectionArgs = selectionArgs,
             sortOrder = sortOrder,
             messageMapper = mapper,
-        ).firstOrNull()
+        ).filterNot { it.isRead }
     }
 
     private data class AggregateTabFolder(
