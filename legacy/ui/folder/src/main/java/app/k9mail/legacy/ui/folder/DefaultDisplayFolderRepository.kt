@@ -32,9 +32,10 @@ class DefaultDisplayFolderRepository(
 ) : DisplayFolderRepository {
     private val sortForDisplay =
         compareByDescending<DisplayFolder> { it.folder.type == FolderType.INBOX }
+            // Top-group folders sit directly below the Inbox, above the Outbox and special folders.
+            .thenByDescending { it.isInTopGroup }
             .thenByDescending { it.folder.type == FolderType.OUTBOX }
             .thenByDescending { it.folder.type != FolderType.REGULAR }
-            .thenByDescending { it.isInTopGroup }
             .thenBy(
                 // #10718 use locale-sensitive ordering for folders
                 Collator.getInstance().apply {
