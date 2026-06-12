@@ -37,8 +37,30 @@ class FolderSettingsDataStore(
             "folder_settings_notifications" -> updateFolder(folder.copy(isNotificationsEnabled = value))
             "folder_settings_push" -> updateFolder(folder.copy(isPushEnabled = value))
             "folder_settings_visible" -> updateFolder(folder.copy(isVisible = value))
-            "folder_settings_aggregate_tab" -> updateFolder(folder.copy(isAggregateTab = value))
+            "folder_settings_aggregate_tab" -> setAggregateTab(value)
             else -> error("Unknown key: $key")
+        }
+    }
+
+    /**
+     * Turning a folder into an inbox tab only makes sense if the folder also syncs, is visible, and
+     * sits in the top group, so enabling the tab cascades all three on. They are applied in a single
+     * [updateFolder] call: [updateFolderSettings] rewrites the whole folder row, so issuing separate
+     * writes for each flag could race and clobber one another. Turning the tab back off is left
+     * narrow - it does not undo settings the user may want to keep.
+     */
+    private fun setAggregateTab(enabled: Boolean) {
+        if (enabled) {
+            updateFolder(
+                folder.copy(
+                    isAggregateTab = true,
+                    isSyncEnabled = true,
+                    isVisible = true,
+                    isInTopGroup = true,
+                ),
+            )
+        } else {
+            updateFolder(folder.copy(isAggregateTab = false))
         }
     }
 

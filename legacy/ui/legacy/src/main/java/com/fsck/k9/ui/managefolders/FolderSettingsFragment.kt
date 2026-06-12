@@ -10,6 +10,7 @@ import androidx.core.view.MenuProvider
 import androidx.lifecycle.Lifecycle
 import androidx.navigation.fragment.findNavController
 import androidx.preference.Preference
+import androidx.preference.SwitchPreference
 import app.k9mail.legacy.ui.folder.FolderNameFormatter
 import com.fsck.k9.fragment.ConfirmationDialogFragment
 import com.fsck.k9.fragment.ConfirmationDialogFragment.ConfirmationDialogFragmentListener
@@ -82,6 +83,27 @@ class FolderSettingsFragment : PreferenceFragmentCompat(), ConfirmationDialogFra
         setCategoryTitle(folderSettings)
         updateMenu()
         setPreferenceVisibility(folderSettings)
+        setupAggregateTabCascade()
+    }
+
+    /**
+     * Enabling "show as inbox tab" cascades sync, visibility, and top-group on in
+     * [FolderSettingsDataStore]. That write is authoritative; here we just mirror it onto the sibling
+     * switches so they move without the user having to reopen the screen. The update is posted so it
+     * runs after the data store has applied the tab toggle, leaving every resulting write carrying
+     * the same fully-enabled folder state.
+     */
+    private fun setupAggregateTabCascade() {
+        requirePreference<SwitchPreference>(PREFERENCE_AGGREGATE_TAB).setOnPreferenceChangeListener { _, newValue ->
+            if (newValue == true) {
+                listView.post {
+                    requirePreference<SwitchPreference>(PREFERENCE_IN_TOP_GROUP).isChecked = true
+                    requirePreference<SwitchPreference>(PREFERENCE_VISIBLE).isChecked = true
+                    requirePreference<SwitchPreference>(PREFERENCE_SYNC).isChecked = true
+                }
+            }
+            true
+        }
     }
 
     private fun updateMenu() {
@@ -147,5 +169,8 @@ class FolderSettingsFragment : PreferenceFragmentCompat(), ConfirmationDialogFra
         private const val PREFERENCE_SYNC = "folder_settings_sync"
         private const val PREFERENCE_PUSH = "folder_settings_push"
         private const val PREFERENCE_NOTIFICATIONS = "folder_settings_notifications"
+        private const val PREFERENCE_AGGREGATE_TAB = "folder_settings_aggregate_tab"
+        private const val PREFERENCE_IN_TOP_GROUP = "folder_settings_in_top_group"
+        private const val PREFERENCE_VISIBLE = "folder_settings_visible"
     }
 }
