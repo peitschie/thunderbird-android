@@ -251,3 +251,51 @@ aggregate-tabs/Gmail-label handling and is not an upstream concern as-is.
   testing. Lower priority than BUG-4 once BUG-4 makes the crash non-looping.
 - **BUG-2** — investigate why the source row is left without the `DELETED` flag after a move
   (likely the un-flagged member of a BUG-1 duplicate pair).
+
+## 7. Resume runbook (paused 2026-06-13)
+
+Investigation is **paused** awaiting a real **batch delete** to capture BUG-2/BUG-1 live
+(§3.3 leading hypothesis). State at pause: logging flags OFF, captures deleted, app running
+normally. Still-open on-device artifacts to reconcile later: 3 stuck `K9LOCAL` placeholders in
+Bin (ids 224/1073/1074) + the All Mail uid-`421242` triple.
+
+Constants:
+- Package `net.thunderbird.android.debug`; account DB `databases/eb8d2c93-42af-451f-8c9a-f419cef4fe3d.db`; settings DB `databases/preferences_storage`.
+- Device: model A065 "Pong", serial `adb-b0cc9c17-ybYu4l`. **Transport id is per-session** — run `adb devices -l` and use the right `-t <id>`/`-s <serial>`.
+- sqlite3: `%LOCALAPPDATA%/Android/Sdk/platform-tools/sqlite3.exe` (none on-device).
+- **Run adb commands with `/data/...` path args from PowerShell, not Git Bash** (MSYS mangles them). Pull binaries with the Bash tool's `>` (PowerShell `>` corrupts binary).
+
+To resume:
+
+1. **Enable logging** — force-stop, pull `preferences_storage`, set the three keys
+   `enableDebugLogging` / `enableSensitiveLogging` / `enableSyncDebugLogging` = `'true'`, push
+   back (PowerShell: `adb push x /data/local/tmp/p.db` → `adb shell run-as <pkg> cp
+   /data/local/tmp/p.db databases/preferences_storage`), `rm` the `-journal`, relaunch.
+   ⚠ sensitive logging writes message content **and OAuth bearer tokens** to logcat — delete
+   captures and turn the flags back off when done.
+2. **Capture** — `adb logcat -c; adb logcat -G 32M;` then stream `adb logcat -v time > cap.log`
+   in the background.
+3. **Repro** — have Phil **batch-delete 2-4 label-coexisting messages** (mail that's in both a
+   tab — Forums/Promotions — and the Inbox) in one action. This is the gap-widening case the
+   single-delete happy path (§3.3) didn't trigger.
+4. **Analyse `cap.log`** (filter to the TB pid via `adb shell pidof <pkg>`):
+   `grep -E "deleteMessages|moveOrCopy|processPending|destroyPlaceholder|PendingMove|UID (MOVE|COPY|STORE|EXPUNGE)|setSpecialFlags|Saved message|synchronizeMailbox"`.
+   Happy path is: local move + `setSpecialFlags` → `UID MOVE` → `EXPUNGE`/`COPYUID` → done.
+5. **Look for the failure signature:** a **`UID COPY` fallback** instead of `UID MOVE`; an
+   `NO`/`BAD` IMAP response or auth retry mid-op; a **source-folder sync re-fetching the moved
+   uid** (re-`SELECT`/`UID FETCH` of the tab) interleaved between the local flag and the
+   pending command — that's the predicted moment the `deleted=0` row reappears.
+6. **DB diagnostics** (pull the account DB, then):
+   ```sql
+   SELECT id,command,data FROM pending_commands;                 -- stuck move_and_mark_as_read?
+   SELECT folder_id,uid,count(*) c FROM messages WHERE uid!='' AND uid NOT LIKE 'K9LOCAL%' AND empty=0 GROUP BY folder_id,uid HAVING c>1;   -- new same-folder dup (BUG-1)
+   SELECT folder_id,count(*) FROM messages WHERE uid LIKE 'K9LOCAL%' GROUP BY folder_id;        -- new stuck placeholder
+   -- new tab orphan (BUG-2): a deleted=0 row in a tab folder (121-124) whose message_id is also in Bin(30)
+   SELECT m.id,m.uid,m.folder_id,m.deleted FROM messages m WHERE m.deleted=0 AND m.folder_id IN (121,122,123,124)
+     AND m.message_id IN (SELECT message_id FROM messages WHERE folder_id=30);
+   ```
+   If a crash recurs, the immediate unblock is §4 (set `deleted=1` on the orphan, relaunch).
+7. **Wrap up** — turn the three flags back to `'false'`, delete `cap.log`, optionally purge the
+   `.adb-diag/` DB snapshots.
+
+Recorded findings live in §1-§3.3; this file is the single source of truth for the investigation.
