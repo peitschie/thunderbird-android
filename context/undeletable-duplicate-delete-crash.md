@@ -148,7 +148,47 @@ local move flagged it, or two All Mail syncs overlap. The sync-debug log is sche
 To capture the live sequence: enable Thunderbird's debug + sensitive (IMAP-protocol) logging,
 reproduce a delete-from-aggregate-tab on a label-coexisting message, and capture `logcat`
 (`ImapConnection` protocol dumps + `MessagingController` ops). Requires changing a setting
-and a user-driven repro — not yet done.
+and a user-driven repro — done; see §3.3.
+
+### 3.3 Live protocol capture (controlled repro, 2026-06-13)
+
+Enabled `enableDebugLogging` / `enableSensitiveLogging` / `enableSyncDebugLogging` in the
+settings DB and captured `logcat` while deleting one message from the **Promotions** tab plus
+a few pull-to-refreshes. It went through the **clean (happy) path** — no orphan, no crash, DB
+structurally unchanged — which itself proves the failure is a **race, not deterministic**:
+
+```
+18:52:15.802 MessagingController: Deleting messages in normal folder, moving
+18:52:15.802 MoveMessageOperations: Moving message [ID:1563] to folder [ID:30]   ← local move
+18:52:15.81  FlagMessageOperations.setSpecialFlags                                ← source flagged \Deleted locally
+18:52:15.830 Processing pending command 'move_and_mark_as_read'
+18:52:21.700 conn247697770 >>> 7 UID MOVE 38 "[Gmail]/Bin"                        ← atomic server move
+18:52:22.374 conn247697770 <<< [30, EXPUNGE] / [OK COPYUID 14 38 201708]          ← source expunged, new Bin uid
+18:52:23.271 conn243327938 >>> 8 UID STORE 201708 +FLAGS.SILENT (\Seen)           ← mark-as-read
+18:52:23.769 Command 'processPendingCommands' completed
+```
+
+Two things the trace reveals about *how the bad case arises*:
+
+1. **Concurrency substrate.** The move runs on `conn247697770` (SELECT Promotions → UID MOVE)
+   while a `checkMail` sync runs **concurrently** on a second connection `conn243327938`
+   (SELECT `[Gmail]/Bin`). Two IMAP connections operating at once on related folders is
+   exactly the window a check-then-save race (BUG-1) needs. Gmail advertises `MOVE` +
+   `X-GM-EXT-1`, so a *single* delete is atomic (UID MOVE + server EXPUNGE) and cleans up
+   correctly — the happy path here.
+2. **Auth-failure history.** At op start the app dismisses several stale
+   `AuthenticationErrorNotification`s for the account ("Authentication failed … update your
+   incoming/outgoing server settings"). No `NO`/`BAD` IMAP responses during this capture, so
+   not active now — but the OAuth account has a history of auth failures, a plausible way for
+   an operation to be interrupted/retried mid-flight.
+
+**Leading hypothesis for BUG-2 (still to be caught red-handed):** in the gap between the local
+`\Deleted` flag and the pending command's `destroyPlaceholderMessages`, a **concurrent sync of
+the source folder re-fetches the source uid** (the Gmail label not yet removed server-side) and
+re-inserts/clears it `deleted=0`; `destroyPlaceholderMessages` then finds an un-flagged row and
+asserts. A non-atomic variant (auth drop → COPY-fallback/retry, or a **batch** delete like the
+original `101`/`102`) widens that gap. Best next repro to capture it: a multi-message **batch**
+delete of label-coexisting mail from a tab.
 
 ## 4. Remediation (on-device, debug build)
 
