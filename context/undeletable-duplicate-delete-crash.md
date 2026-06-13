@@ -107,6 +107,49 @@ The server move had already succeeded (the real `201707` copy is in Bin), so eac
 `moveMessagesAndMarkAsRead` is tolerated and it always crashes at the `destroyPlaceholderMessages`
 step.
 
+### 3.1 Forensic evidence (device snapshots, 2026-06-13)
+
+Mined from the pre-fix snapshot (`account_fresh.db`) plus a post-fix one. DB schema v92;
+Gmail/IMAP account; 904 message rows.
+
+- **The duplication is overwhelmingly Gmail-label coexistence, not corruption.** 132
+  Message-IDs appear in >1 folder; top folder-sets: `All Mail+bill` (46), `Forums+INBOX`
+  (33), `Promotions+INBOX` (23), `Social/Updates+INBOX` (3/2). One server message wearing
+  multiple Gmail labels = multiple IMAP rows sharing a Message-ID — the substrate the
+  aggregate-tabs feature dedups (BUG-6 context).
+- **BUG-1 is proven, not hypothetical.** `All Mail` (folder 29) holds server uid `421242` in
+  **three rows** — identical uid/date/Message-ID but **three distinct `message_part_id`s
+  (792 / 448 / 197)** — i.e. the same server message fetched and inserted three separate
+  times. Only a check-then-save race against the non-unique `(uid, folder_id)` index permits
+  this. It **persists across syncs and the fix** (still 3 rows post-fix) — does not self-heal.
+- **The crash was a batch delete; BUG-2 hit every message in it.** PR #2919 produced two
+  adjacent Forums messages `101`/`102`, moved to Bin as `201707`/`201706`. **Both** Forums
+  source rows were left `deleted=0` (BUG-2). They differed only downstream: `101`'s command
+  crash-looped (stuck in queue); `102`'s command completed (placeholder renamed to the server
+  uid) yet *still* left the Forums orphan. So BUG-2 is the consistent defect; the crash is a
+  separate consequence. After the fix unblocked the queue a sync reconciled **both** orphans
+  away (`Bin∩Forums` shared Message-IDs went 2 → 0).
+- **Reconciliation leaves orphan placeholders routinely.** Bin held **4** un-destroyed
+  `K9LOCAL` placeholders pre-fix: ids `224` and `1750` each with a real server sibling in Bin
+  (duplicate-in-Bin), and `1073`/`1074` with **no backing copy anywhere** (pure orphans).
+  Post-fix **3 remain** (224, 1073, 1074) — still-visible duplicates in Bin, not yet cleaned.
+- **Cadence:** 15-minute poll, **no push** on any folder (`files/thunderbird-sync-debug.txt`).
+  During the loop, `last sync time` froze at `1781336575968` from 17:49 on and the worker
+  re-scheduled with `initial delay: 0 ms` repeatedly — no sync ever completed.
+- **Flags** carry only download state (`X_DOWNLOADED_FULL` ×541, `X_DOWNLOADED_PARTIAL`
+  ×183); **no `X_REMOTE_COPY_STARTED`**, so the dedup-on-copy path
+  (`MessagingController` ~:867-888) was not involved here.
+
+### 3.2 What the static data cannot show (next collection step)
+
+The snapshots prove *that* the source row is unflagged and *that* rows get tripled, but not
+the *interleaving* that causes it — e.g. whether a Forums poll re-inserts uid 101 after the
+local move flagged it, or two All Mail syncs overlap. The sync-debug log is scheduling-only.
+To capture the live sequence: enable Thunderbird's debug + sensitive (IMAP-protocol) logging,
+reproduce a delete-from-aggregate-tab on a label-coexisting message, and capture `logcat`
+(`ImapConnection` protocol dumps + `MessagingController` ops). Requires changing a setting
+and a user-driven repro — not yet done.
+
 ## 4. Remediation (on-device, debug build)
 
 Let the app self-heal rather than hand-deleting rows (which would orphan `message_parts` /
