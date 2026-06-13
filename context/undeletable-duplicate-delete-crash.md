@@ -1,9 +1,10 @@
 # Undeletable duplicate → debug crash loop on delete: diagnosis & fix
 
 Working notes for the `feature/aggregate-folder-tabs` branch. Captures a reproducible
-crash-loop that makes a *duplicated* email impossible to delete on **debug builds**, its
-root cause in the legacy move/delete path, the on-device remediation, and what the upstream
-issue tracker does (and does not) already cover.
+crash-loop that makes a *duplicated* email impossible to delete on **debug builds**, a
+consolidated register of the distinct defects behind it, their root cause in the legacy
+move/delete path, the on-device remediation, and what the upstream issue tracker does (and
+does not) already cover.
 
 Diagnosed 2026-06-13 on a physical device running `net.thunderbird.android.debug`
 (21.0-SNAPSHOT) against a Gmail/IMAP account.
@@ -26,10 +27,34 @@ java.lang.AssertionError: Placeholder message must have the DELETED flag set
     ...
 ```
 
-## 2. Root cause
+## 2. Consolidated bug register
+
+What presents as one crash is a chain of distinct, separately-fixable defects. Collected
+here so they can be tracked individually:
+
+| ID | Defect | Where | Type | Scope | Related |
+| --- | --- | --- | --- | --- | --- |
+| **BUG-1** | Duplicate `messages` rows for one email (sync race) | non-unique `(uid, folder_id)` index; `ImapSync` check-then-save dedup | **root cause** | all builds | [#2705](https://github.com/thunderbird/thunderbird-android/issues/2705) |
+| **BUG-2** | A move leaves a source-folder row at the moved uid that was never flagged `DELETED` | move/delete path → violates `destroyPlaceholderMessages` precondition | trigger state (downstream of BUG-1) | all builds | — |
+| **BUG-3** | Data-integrity assertion is **fatal in debug** instead of only logged | `MessagingController.java:1040-1042` (`if (BuildConfig.DEBUG) throw new AssertionError`) | debug-only crash | debug | — |
+| **BUG-4** | Poison-command cleanup catches `Exception` but not `Error`, so the failed command is **never dequeued** → single crash becomes an infinite loop | `processPendingCommandsSynchronous` `:819-826`; cleanup at `:821` is unreachable for an `AssertionError` (an `Error`, not `Exception`). Plus TODO `:828-830`: no local-state revert / user notification on command failure | robustness | debug (only debug throws the `Error` here) | — |
+| **BUG-5** | After delete the email persists duplicated in Trash/Bin (local placeholder + server copy) | reconcile loop `processPendingMoveOrCopy:1003-1024` | symptom | release self-heals on sync; stuck here | [#2705](https://github.com/thunderbird/thunderbird-android/issues/2705) |
+| **BUG-6** | Aggregate-tabs prototype operates in the Gmail-label space (one message = N IMAP rows), raising the rate of BUG-1 | branch `feature/aggregate-folder-tabs`; [`gmail-semantics-and-extension-points.md`](./gmail-semantics-and-extension-points.md) | amplifier | this branch only | — |
+
+**Relationships:** BUG-1 → BUG-2 → (BUG-3 fires + BUG-4 fails to dequeue) = the unbounded
+crash loop; BUG-5 is the user-visible duplicate; BUG-6 makes BUG-1 more frequent here.
+BUG-3 alone would crash *once*; it is BUG-4 that makes it forever. Related upstream reports
+that are *near* but not identical are catalogued in §5.
+
+## 3. Root cause
 
 A `move_and_mark_as_read` pending command (the delete) re-runs on every sync and aborts
-mid-execution, so it never clears from `pending_commands` — a permanent crash loop.
+mid-execution, so it never clears from `pending_commands` — a permanent crash loop. *Why it
+never clears* is itself a defect (BUG-4): `processPendingCommandsSynchronous` removes a
+failing command only inside `catch (Exception e)` (`:819-821`), but the assertion throws an
+`AssertionError` — an `Error`, not an `Exception` — which slips past that cleanup entirely
+and propagates uncaught to kill the thread. Had `:1041` thrown a `RuntimeException`, the
+command would have been dequeued (`:821`) and the app would have crashed at most once.
 
 The abort is an assertion in `destroyPlaceholderMessages`
 (`legacy/core/.../controller/MessagingController.java:1027-1045`). A move first writes a
@@ -82,7 +107,7 @@ The server move had already succeeded (the real `201707` copy is in Bin), so eac
 `moveMessagesAndMarkAsRead` is tolerated and it always crashes at the `destroyPlaceholderMessages`
 step.
 
-## 3. Remediation (on-device, debug build)
+## 4. Remediation (on-device, debug build)
 
 Let the app self-heal rather than hand-deleting rows (which would orphan `message_parts` /
 `threads` / fulltext entries). Set the `DELETED` flag on the orphan source row so the queued
@@ -109,7 +134,7 @@ Procedure:
    placeholder, and only the real server copy remains in Bin. Verify `pending_commands`
    is empty.
 
-## 4. Upstream issue tracker status (searched 2026-06-13)
+## 5. Upstream issue tracker status (searched 2026-06-13)
 
 **The exact crash is not reported.** Searches of `thunderbird/thunderbird-android` for
 `destroyPlaceholderMessages`, `"Placeholder message"` + the assertion text, and
@@ -129,10 +154,17 @@ Related, user-visible reports of the same underlying placeholder/duplicate mecha
 The *duplicate creation* that triggers all this is specific to this branch's
 aggregate-tabs/Gmail-label handling and is not an upstream concern as-is.
 
-## 5. Follow-ups (not done)
+## 6. Follow-ups (not done)
 
-- Fix the duplicate-row root cause: the `ImapSync` check-then-save race against the
-  non-unique `(uid, folder_id)` index that lets two rows exist for one message.
-- Decide whether this branch should soften the `BuildConfig.DEBUG` assertion so a stray
-  duplicate degrades to a warning (as in release) instead of bricking the pending-command
-  queue during prototype testing.
+- **BUG-1** — fix the duplicate-row root cause: the `ImapSync` check-then-save race against
+  the non-unique `(uid, folder_id)` index that lets two rows exist for one message.
+- **BUG-4** — widen the poison-command cleanup in `processPendingCommandsSynchronous` to
+  catch `Throwable`/`Error` (not just `Exception`), so a command that throws an
+  `AssertionError` is still dequeued instead of re-firing forever; and address the TODO at
+  `:828-830` (revert local changes / notify the user on command failure). This is the fix
+  that stops *any* such fault from becoming an infinite loop.
+- **BUG-3** — decide whether this branch should soften the `BuildConfig.DEBUG` assertion so a
+  stray duplicate degrades to a warning (as in release) instead of crashing during prototype
+  testing. Lower priority than BUG-4 once BUG-4 makes the crash non-looping.
+- **BUG-2** — investigate why the source row is left without the `DELETED` flag after a move
+  (likely the un-flagged member of a BUG-1 duplicate pair).
