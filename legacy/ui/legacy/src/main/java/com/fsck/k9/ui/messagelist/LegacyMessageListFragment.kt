@@ -44,6 +44,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import app.k9mail.core.android.common.contact.ContactRepository
 import app.k9mail.feature.launcher.FeatureLauncherActivity
 import app.k9mail.feature.launcher.FeatureLauncherTarget
+import app.k9mail.legacy.mailstore.MessageStoreManager
 import app.k9mail.legacy.message.controller.MessageReference
 import app.k9mail.legacy.message.controller.MessagingControllerRegistry
 import app.k9mail.legacy.message.controller.SimpleMessagingListener
@@ -166,6 +167,7 @@ class LegacyMessageListFragment :
     private val accountManager: LegacyAccountManager by inject()
     private val connectivityManager: ConnectivityManager by inject()
     private val localStoreProvider: LocalStoreProvider by inject()
+    private val messageStoreManager: MessageStoreManager by inject()
 
     private val setupArchiveFolderDialogFragmentFactory: SetupArchiveFolderDialogFragmentFactory by inject()
     private val buildSwipeActions: DomainContract.UseCase.BuildSwipeActions by inject()
@@ -1845,12 +1847,44 @@ class LegacyMessageListFragment :
             val folderId = currentFolder!!.databaseId
             account?.id?.let { messagingController.synchronizeMailbox(it, folderId, false, activityListener) }
             account?.id?.let { messagingController.sendPendingMessages(it, activityListener) }
+
+            // Refreshing the Inbox should also pull new mail into the aggregate-tab folders so their
+            // unread counts and previews update at the same time (and a tab appears for a folder that
+            // just gained unread mail). The Unified Inbox / multi-account paths below already sync
+            // every visible, sync-enabled folder, so this only fills the single-folder Inbox gap.
+            if (shouldShowAggregateTabs()) {
+                account?.let { syncAggregateTabFolders(it, excludeFolderId = folderId) }
+            }
         } else if (allAccounts) {
             messagingController.checkMail(null, true, true, false, activityListener)
         } else {
             for (accountUuid in accountUuids) {
                 val account = accountManager.getAccount(accountUuid)
                 account?.id?.let { messagingController.checkMail(it, true, true, false, activityListener) }
+            }
+        }
+    }
+
+    /**
+     * Synchronises every folder flagged as an aggregate tab for [account], skipping [excludeFolderId]
+     * (the Inbox, already synced by the caller). Enumerating the folders reads the database, so it
+     * runs off the main thread; each [synchronizeMailbox] call then hands off to the controller's own
+     * background executor.
+     */
+    private fun syncAggregateTabFolders(account: LegacyAccount, excludeFolderId: Long) {
+        val accountId = account.id
+        lifecycleScope.launch(Dispatchers.IO) {
+            val tabFolderIds = messageStoreManager.getMessageStore(account.uuid).getDisplayFolders(
+                includeHiddenFolders = true,
+                outboxFolderId = null,
+            ) { folder ->
+                if (folder.isAggregateTab) folder.id else null
+            }.filterNotNull()
+
+            for (folderId in tabFolderIds) {
+                if (folderId != excludeFolderId) {
+                    messagingController.synchronizeMailbox(accountId, folderId, false, activityListener)
+                }
             }
         }
     }
